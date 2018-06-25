@@ -1,0 +1,295 @@
+theory VCP
+
+begin
+
+builtins: hashing, symmetric-encryption, bilinear-pairing, signing
+
+functions: h1/1, h2/1
+
+
+
+//long-term keys are registered
+
+rule register_longterm_keys:
+
+[Fr(~x), Fr(~y)]--[Role('GECU'),Role('EDEV')]->[!LtkG($GECU,~x),!LtkE($EDEV,~y),!PkG($GECU,pk(~x)),!PkE($EDEV,pk(~y)),Out(<pk(~x),pk(~y)>)]
+
+
+
+
+//GECU and EDEV are initialised by binding with long-term keys
+
+rule initialise_GECU:
+
+[Fr(~id),!LtkG(GECU,x),!PkG(GECU,pk(x)),!PkE(EDEV,pk(y))]
+
+--[Create(GECU, ~id), 
+Role('GECU') ]->
+
+[St_GECU_1(GECU, ~id,x,pk(x),pk(y), EDEV)]
+
+rule initialise_EDEV:
+
+[ Fr(~id),!LtkE(EDEV,y),!PkE(EDEV,pk(y)),!PkG(GECU,pk(x))]
+
+--[Create(EDEV, ~id), 
+Role('EDEV') ]->
+
+[St_EDEV_1(EDEV, ~id, y,pk(y),pk(x),GECU)]
+
+
+
+
+
+//EDEV sends first message
+
+rule send_1:
+let
+Yp=pmult(~a,'P')
+Z=sign(h1(Yp,GECU),y)
+in
+
+[Fr(~a),!LtkE(EDEV,y),!PkE(EDEV,pk(y)), St_EDEV_1(EDEV, ~id, y,pk(y),pk(x),GECU)]
+--[Send(<EDEV,<Yp,Z>>),
+ Honest(EDEV),
+ Honest(GECU), 
+Role('EDEV'),Running_strongB(Yp)]->
+[St_EDEV_2(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z), Out(<Yp,Z>)]
+
+
+rule Recv_1:
+let
+Yp=pmult(a,'P')
+Z=sign(h1(Yp,GECU),y)
+in
+
+[In(<Yp,Z>),!PkE(EDEV,pk(y)), St_GECU_1(GECU, ~id, x,pk(x),pk(y),EDEV)]
+--[Receive(<GECU,<Yp,Z>>),
+VerifyZ(GECU,verify(Z,h1(Yp,GECU),pk(y))),
+ Honest(EDEV), 
+Honest(GECU),
+ Role('GECU'),Running_strongA(Yp) ]->
+[St_GECU_2(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z)]
+
+
+
+rule send_2:
+let
+ W=pmult(~b,'P')
+ e=pmult(Yp,~b)
+ SK=senc(~seedk,e)
+ V=sign(h2(Yp,W,SK,EDEV),x)   
+in
+
+[Fr(~b),Fr(~seedk),!LtkG(GECU,x),!PkG(GECU,pk(x)),!PkE(EDEV,pk(y)),St_GECU_2(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z)]
+--[Send(<GECU,<W,SK,V>>), 
+Honest(GECU),
+Honest(EDEV), 
+Role('GECU') ]->
+[St_GECU_3(GECU, ~id, x,pk(x),pk(y), EDEV,Yp,Z,~seedk,W,SK,e,V),Out(<W,SK,V>)]
+
+rule Recv_2:
+let
+ W=pmult(b,'P')
+ e=pmult(b,Yp)
+ e=pmult(a,W)
+ SK=senc(seedk,e)
+ V=sign(h2(Yp,W,SK,EDEV),x)   
+in
+
+[In(<W,SK,V>),!PkG(GECU,pk(x)),!PkE(EDEV,pk(y)),St_EDEV_2(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z)]
+--[Receive(<EDEV,<W,SK,V>>), VerifyV (verify(V,h2(Yp,W,SK,EDEV),pk(x))), DecryptSK(sdec(senc(seedk,e),e)),
+ Honest(EDEV),
+ Honest(GECU), 
+Role('EDEV')]->
+[St_EDEV_3(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk)]
+
+
+
+
+
+rule send_3:
+let
+    N=sign(h1(seedk,GECU),y)
+in
+
+[!LtkE(EDEV,y),!PkE(EDEV,pk(y)),St_EDEV_3(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk)]
+--[Send(<EDEV,N>),
+ Honest(GECU),
+ Honest(EDEV),
+ Role('EDEV'),
+Secret(EDEV,e,seedk),Commit_strongA(Yp)]->
+[St_EDEV_4(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N), Out(N)]
+
+rule Recv_3:
+let
+    N=sign(h1(seedk,GECU),y)
+in
+
+[In(N),!PkE(EDEV,pk(y)),St_GECU_3(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V)]
+--[Receive(<GECU,N>), VerifyN(verify(N,h1(seedk,GECU),pk(y))),
+ Honest(GECU),
+ Honest(EDEV),
+ Role('GECU'), 
+Secret(GECU,e,seedk),Commit_strongB(Yp)]->
+[St_GECU_4(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N)]
+
+
+
+
+//SKUP PROTOCOL
+
+rule send_4:
+let
+ J=pmult(~b2,'P')
+ 
+ 
+ SG=sign(h2(J,e,EDEV),x)   
+in
+
+[Fr(~b2),!LtkG(GECU,x),St_GECU_4(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N)]
+--[Send(<GECU,<J,SG>>), 
+Honest(GECU),
+Honest(EDEV), 
+Role('GECU'),Running_strongBB(J)]->
+[St_GECU_5(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N,J,SG),Out(<J,SG>)]
+
+rule Recv_4:
+let
+ J=pmult(b2,'P')
+ 
+ 
+ SG=sign(h2(J,e,EDEV),x)   
+in
+
+[In(<J,SG>),!PkG(GECU,pk(x)),St_EDEV_4(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N)]
+--[Receive(<EDEV,<J,SG>>), VerifySG (verify(SG,h2(J,e,EDEV),pk(x))),
+ Honest(EDEV),
+ Honest(GECU), 
+Role('EDEV'),Running_strongBB(J)]->
+[St_EDEV_5(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N,J,SG)]
+
+rule send_5:
+let
+
+G=pmult(~a2,'P')
+enew=pmult(~a2,J)
+SD=sign(h2(J,enew,G,GECU),y) 
+in
+
+[Fr(~a2),!LtkE(GECU,y),St_EDEV_5(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N,J,SG)]
+--[Send(<EDEV,<G,SD>>), 
+Honest(GECU),
+Honest(EDEV), 
+Role('EDEV'),
+Secret2(EDEV,enew),Commit_strongAA(J) ]->
+[St_EDEV_6(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N,J,SG,G,SD),Out(<G,SD>)]
+
+rule Recv_5:
+let
+
+G=pmult(a2,'P')
+enew=pmult(b2,G)
+SD=sign(h2(J,enew,G,GECU),y) 
+in
+
+[In(<G,SD>),!PkE(EDEV,pk(y)),St_GECU_5(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N,J,SG)]
+--[Receive(<GECU,N>), VerifySD(verify(SD,h2(J,enew,G,GECU),y)),
+ Honest(GECU),
+ Honest(EDEV),
+ Role('GECU'), 
+Secret2(GECU,enew),Commit_strongBB(J)]->
+[St_GECU_6(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N,J,SG,G,SD)]
+
+rule KKS:
+let
+ Y1=pmult(~a1,'P')
+ W1=pmult(~b1,'P')
+ e1=pmult(Y1,W1)
+in
+
+[Fr(~a1),Fr(~b1),St_GECU_6(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N,J,SG,G,SD),St_EDEV_6(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N,J,SG,G,SD)]
+--[Reveal(GECU),Reveal(EDEV)]->
+[Out(<e1,Y1,W1>),St_GECU_7(GECU, ~id, x,pk(x),pk(y),EDEV,Yp,Z,seedk,W,SK,e,V,N,J,SG,G,SD),St_EDEV_7(EDEV, ~id, y,pk(y),pk(x),GECU,Yp,Z,W,e,SK,V,seedk,N,J,SG,G,SD)]
+
+
+
+
+
+
+//	SECURITY PROPERTIES
+
+
+lemma executable:
+exists-trace
+"(Ex EDEV GECU  m #i #j. Send(<EDEV,m>)@i & Receive(<GECU,m>) @ j & i <j )<=>T"
+
+lemma Injectiveagreement_EDEV:
+    " (All Yp #i .
+        Commit_strongA(Yp)@ #i
+        ==>
+        (Ex #j . Running_strongA(Yp) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongA(Yp) @ #j & not (#i = #j)))
+    )"
+
+
+
+
+lemma Injectiveagreement_GECU:
+    " (All Yp #i .
+        Commit_strongB(Yp)@ #i
+        ==>
+        (Ex #j . Running_strongB(Yp) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongB(Yp) @ #j & not (#i = #j)))
+    )"
+
+
+lemma Injectiveagreement_EDEV_SKUP:
+    " (All J #i .
+        Commit_strongA(J)@ #i
+        ==>
+        (Ex #j . Running_strongBB(J) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongAA(J) @ #j & not (#i = #j)))
+    )"
+
+
+
+
+lemma Injectiveagreement_GECU_SKUP:
+    " (All J #i .
+        Commit_strongB(J)@ #i
+        ==>
+        (Ex #j . Running_strongBB(J) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongBB(J) @ #j & not (#i = #j)))
+    )"
+
+
+
+
+
+
+lemma EDEV_secrecy:
+all-traces
+" All EDEV e seedk enew #h #r. Secret(EDEV,e,seedk) @ h &  Honest(EDEV) @ r &Secret2(EDEV,enew) @ h==> not(Ex seedk e enew #t. K(<seedk,e,enew>)@t)"
+
+lemma GECU_secrecy:
+all-traces
+" All GECU e seedk enew #h #r. Secret(GECU,e,seedk) @ h &  Honest(GECU) @ r&Secret2(GECU,enew) @ r ==> not(Ex seedk e enew #t. K(<seedk,e,enew>)@t)"
+
+
+
+
+lemma KKS:
+   all-traces
+" 
+
+    
+ (All GECU EDEV seedk e enew #n. Reveal(GECU) @ n &  Reveal(EDEV) @ n & Secret(EDEV,seedk,e) @ n &Secret(GECU,seedk,e) @ n&Secret2(EDEV,enew) @ n&Secret2(GECU,enew) @ n ==> not( Ex seedk e enew #j.K(<seedk,e,enew>)@j))"  
+
+
+end
+
+
+
+
+

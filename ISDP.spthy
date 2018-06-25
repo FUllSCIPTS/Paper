@@ -1,0 +1,216 @@
+theory ISDP
+
+begin
+
+builtins: hashing
+
+
+functions: KDF/1
+
+//long-term keys are registered
+
+rule register_longterm_keys:
+
+[Fr(~Ki),Fr(~GK)]--[]->[!PS($ECUi,$GECU,~Ki),!GS($ECUi,$GECU,~GK)]
+
+
+
+
+//ECU and GECU are initialised by binding with long-term keys
+
+rule initialise_ECUi:
+
+[Fr(~id),!PS(ECUi,GECU,Ki),!GS(ECUi,GECU,GK)]
+
+--[Create(ECUi, ~id), 
+Role('ECUi') ]->
+
+[St_ECUi_1(ECUi, ~id, Ki, GK, GECU)]
+
+rule initialise_GECU:
+
+[Fr(~id),!PS(ECUi,GECU,Ki),!GS(ECUi,GECU,GK)]
+--[Create(GECU, ~id),
+ Role('GECU') ]->
+[St_GECU_1(GECU, ~id, Ki, GK, ECUi)]
+
+
+
+
+
+//ECUi sends first message
+
+rule send_1:
+
+[Fr(~Ri), St_ECUi_1(ECUi, ~id, Ki, GK, GECU)]
+--[Send(<ECUi,~Ri>),
+ Honest(ECUi),
+ Honest(GECU), 
+Role('ECUi'),Running_strongB(~Ri)]->
+[St_ECUi_2(ECUi, ~id, Ki, GK, GECU, ~Ri), Out(~Ri)]
+
+
+rule Recv_1:
+
+[In(Ri), St_GECU_1(GECU, ~id, Ki, GK, ECUi)]
+--[Receive(<ECUi,Ri>),
+ Honest(GECU), 
+Honest(ECUi),
+ Role('GECU'),Running_strongA(Ri) ]->
+[St_GECU_2(GECU, ~id, Ki, GK, ECUi, Ri)]
+
+
+
+
+
+rule send_2:
+let
+    MAC1=h(<ECUi,GECU,Ri,~seed1,Ki>)
+in
+
+[Fr(~seed1),!PS(ECUi,GECU,Ki),!GS(ECUi,GECU,GK), St_GECU_2(GECU, ~id, Ki, GK, ECUi,Ri)]
+--[Send(<GECU,MAC1>), 
+Honest(GECU),
+ Honest(ECUi), 
+Role('GECU') ]->
+[St_GECU_3(GECU, ~id, Ki, GK, ECUi,Ri,~seed1), Out(<~seed1,MAC1>)]
+
+rule Recv_2:
+let
+    MAC1=h(<ECUi,GECU,Ri,seed1,Ki>)
+in
+
+[In(<seed1,MAC1>),!PS(ECUi,GECU,Ki),!GS(ECUi,GECU,GK), St_ECUi_2(ECUi, ~id, Ki, GK, GECUi,Ri)]
+--[Receive(<GECU,MAC1>),
+ Honest(ECUi),
+ Honest(GECU), 
+Role('ECUi')]->
+[St_ECUi_3(ECUi, ~id, Ki, GK, GECU,Ri,seed1)]
+
+
+
+
+
+rule send_3:
+let
+    EK=KDF(<seed1,GK>)   
+    AK=KDF(<seed1,GK>)
+    MAC2=h(<ECUi,GECU,EK,AK,seed1,Ki>)
+in
+
+[!GS(ECUi,GECU,GK),!GS(ECUi,GECU,Ki), St_ECUi_3(ECUi, ~id, Ki, GK, GECU,Ri,seed1)]
+--[Send(<ECUi,MAC2>),
+ Honest(GECU),
+ Honest(ECUi),
+ Role('ECUi'),
+Secret(ECUi,EK,AK),Commit_strongA(Ri)]->
+[St_ECUi_4(ECUi, ~id, Ki, GK, GECU,Ri,seed1,EK,AK), Out(<MAC2>)]
+
+rule Recv_3:
+let
+    EK=KDF(<seed1,GK>)   
+    AK=KDF(<seed1,GK>)
+    MAC2=h(<ECUi,EK,AK,seed1,Ki>)
+in
+
+[In(<MAC2>),!GS(ECUi,GECU,GK), St_GECU_3(GECU, ~id, Ki, GK, ECUi,Ri,seed1)]
+--[Receive(<GECU,MAC2>),
+ Honest(GECU),
+ Honest(ECUi),
+ Role('GECU'), 
+Secret(GECU,EK,AK),Commit_strongB(Ri)]->
+[St_GECU_4(GECU, ~id, Ki, GK, ECUi,Ri,seed1,EK,AK)]
+
+
+
+
+
+
+rule KKS:
+let
+EK1=KDF(<~seed2,GK>)   
+AK1=KDF(<~seed2,GK>)
+in
+[Fr(~seed2),!GS(ECUi,GECU,GK)]
+--[Sesreveal(ECUi)]->
+[Out(<EK1,AK1>)]
+
+
+
+
+
+
+//	SECURITY PROPERTIES
+
+
+lemma executable:
+exists-trace
+"(Ex ECUi GECU m #i #j. Send(<ECUi,m>)@i & Receive(<GECU,m>) @ j) <=> T"
+
+lemma Injectiveagreement_ECUi:
+    " (All Ri #i .
+        Commit_strongA(Ri)@ #i
+        ==>
+        (Ex #j . Running_strongA(Ri) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongA(Ri) @ #j & not (#i = #j)))
+    )"
+
+
+
+
+lemma Injectiveagreement_GECU:
+    " (All Ri #i .
+        Commit_strongB(Ri)@ #i
+        ==>
+        (Ex #j . Running_strongB(Ri) @ #j & #j < #i) &
+        (not (Ex #j . Commit_strongB(Ri) @ #j & not (#i = #j)))
+    )"
+
+
+
+
+
+
+
+lemma ECUi_secrecy:
+all-traces
+
+  " 
+All ECUi EK AK #i.
+        Secret(ECUi,EK,AK) @ i  ==> not( Ex ECUi #j. Honest(ECUi) @j &
+        
+       Ex EK AK #r.K(<EK,AK>)@r)"
+
+
+
+lemma GECU_secrecy:
+all-traces
+
+  " 
+All GECU EK AK #i.
+        Secret(GECU,EK,AK) @ #i  ==> not( Ex GECU #j. Honest(GECU) @j &
+        
+       Ex EK AK #r.K(<EK,AK>)@r)"
+/*
+
+lemma KKS:
+exists-trace
+" (Ex ECUi EK AK #r #j. Secret(ECUi,EK,AK) @r& K(<EK,AK>)@j)& Ex ECUi #n. Sesreveal(ECUi) @n & #r< #n"
+
+*/
+lemma ECUi_KKS:
+all-traces
+
+  " 
+All ECUi EK AK #i #m #n.
+        Secret(ECUi,EK,AK) @ i & Honest(ECUi)@ m &Sesreveal(ECUi) @ n & #i<#n ==> not( 
+      
+       Ex EK AK #r.K(<EK,AK>)@r )"
+
+
+end
+
+
+
+
+
